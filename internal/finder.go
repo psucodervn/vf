@@ -3,10 +3,10 @@ package internal
 import (
 	"fmt"
 	"io/ioutil"
-	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ktr0731/go-fuzzyfinder"
@@ -23,39 +23,38 @@ type dirInfo struct {
 }
 
 func (f *Finder) Run(dir string) {
-	chDir := make(chan dirInfo)
-	chWalk := make(chan dirInfo, 2_000_000)
-	var dirs []string
+	chDir := make(chan dirInfo, 2_000)
+	chWalk := make(chan dirInfo, 2_000)
+	var dirs struct {
+		sync.Mutex
+		arr []string
+	}
 
-	for i := 0; i < runtime.GOMAXPROCS(0); i++ {
+	for i := 0; i < runtime.GOMAXPROCS(0)*2; i++ {
 		go func() {
 			for {
 				select {
 				case d := <-chDir:
-					// fmt.Println(d.path)
-					dirs = append(dirs, d.path)
-					select {
-					case chWalk <- d:
-					case <-time.After(3 * time.Second):
-						fmt.Println("cannot send to chWalk")
-					}
-					// case <-time.After(5 * time.Second):
-					//   fmt.Println("dir timeout...")
+					dirs.Lock()
+					dirs.arr = append(dirs.arr, d.path)
+					dirs.Unlock()
+					go func() {
+						select {
+						case chWalk <- d:
+						case <-time.After(3 * time.Second):
+							fmt.Println("cannot send to chWalk")
+						}
+					}()
 				}
 			}
 		}()
 	}
 
-	for i := 0; i < runtime.GOMAXPROCS(0); i++ {
+	for i := 0; i < runtime.GOMAXPROCS(0)*8; i++ {
 		go func() {
-			for {
-				select {
-				case d := <-chWalk:
-					if err := f.walk(d.path, d.depth, chDir); err != nil {
-						_, _ = fmt.Fprintln(os.Stderr, err)
-					}
-					// case <-time.After(5 * time.Second):
-					//   fmt.Println("walk timeout...")
+			for d := range chWalk {
+				if err := f.walk(d.path, d.depth, chDir); err != nil {
+					// _, _ = fmt.Fprintln(os.Stderr, err)
 				}
 			}
 		}()
@@ -63,18 +62,16 @@ func (f *Finder) Run(dir string) {
 
 	name := filepath.Base(dir)
 	chDir <- dirInfo{path: dir, name: name, depth: 0}
-	// wg.Wait()
-	// select {}
 
-	idx, err := fuzzyfinder.Find(&dirs, func(i int) string {
-		return dirs[i]
+	idx, err := fuzzyfinder.Find(&dirs.arr, func(i int) string {
+		return dirs.arr[i]
 	},
 		fuzzyfinder.WithHotReload(),
 		fuzzyfinder.WithPreviewWindow(func(i, width, height int) string {
-			if i < 0 || i >= len(dirs) {
+			if i < 0 || i >= len(dirs.arr) {
 				return ""
 			}
-			path := dirs[i]
+			path := dirs.arr[i]
 			files, err := ioutil.ReadDir(path)
 			if err != nil {
 				return ""
@@ -93,15 +90,13 @@ func (f *Finder) Run(dir string) {
 			return sb.String()
 		}),
 	)
-	// fmt.Println(dirs[idx], err)
 
 	if err == nil {
-		fmt.Println(dirs[idx])
+		fmt.Println(dirs.arr[idx])
 	}
 }
 
 func (f *Finder) walk(dir string, depth int, chDir chan<- dirInfo) error {
-	// fmt.Println("walk", dir, depth)
 	if depth > f.Depth {
 		return nil
 	}
