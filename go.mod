@@ -1,6 +1,6 @@
 module vf
 
-go 1.17
+go 1.16
 
 require (
 	github.com/ktr0731/go-fuzzyfinder v0.3.1
