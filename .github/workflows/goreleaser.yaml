@@ -16,9 +16,9 @@ jobs:
           go-version: 1.17
         id: go
       - name: Check out code into the Go module directory
-        uses: actions/checkout@v1
+        uses: actions/checkout@v2
       - name: goreleaser
-        uses: goreleaser/goreleaser-action@master
+        uses: goreleaser/goreleaser-action@v2
         with:
           args: release
         env:
